@@ -17,11 +17,13 @@
  * Czech Technical University        (http://www.cvut.cz/)
  ******************************************************************************/
 
+#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/reset.h>
 
 #include "ctucanfd.h"
 
@@ -52,6 +54,7 @@ static int ctucan_platform_probe(struct platform_device *pdev)
 	int ret;
 	unsigned int ntxbufs;
 	int irq;
+	unsigned long clk_rate = 0;
 
 	/* Get the virtual base address for the device */
 	addr = devm_platform_ioremap_resource(pdev, 0);
@@ -69,7 +72,34 @@ static int ctucan_platform_probe(struct platform_device *pdev)
 	 * it will be passed as property via device tree
 	 */
 	ntxbufs = 4;
-	ret = ctucan_probe_common(dev, addr, irq, ntxbufs, 0,
+	if (of_device_is_compatible(dev->of_node, "esp,esp32s31-twai")) {
+		struct reset_control *rst;
+		struct clk *clk;
+
+		clk = devm_clk_get_enabled(dev, "apb");
+		if (IS_ERR(clk))
+			return dev_err_probe(dev, PTR_ERR(clk), "APB clock\n");
+
+		clk = devm_clk_get_enabled(dev, "core");
+		if (IS_ERR(clk))
+			return dev_err_probe(dev, PTR_ERR(clk), "core clock\n");
+
+		clk_rate = clk_get_rate(clk);
+		if (!clk_rate)
+			return dev_err_probe(dev, -EINVAL, "invalid core clock rate\n");
+
+		rst = devm_reset_control_get_exclusive_deasserted(dev, NULL);
+		if (IS_ERR(rst))
+			return dev_err_probe(dev, PTR_ERR(rst), "reset control\n");
+
+		ret = reset_control_assert(rst);
+		if (ret)
+			return ret;
+		ret = reset_control_deassert(rst);
+		if (ret)
+			return ret;
+	}
+	ret = ctucan_probe_common(dev, addr, irq, ntxbufs, clk_rate,
 				  1, ctucan_platform_set_drvdata);
 
 	if (ret < 0)
@@ -103,6 +133,7 @@ static SIMPLE_DEV_PM_OPS(ctucan_platform_pm_ops, ctucan_suspend, ctucan_resume);
 
 /* Match table for OF platform binding */
 static const struct of_device_id ctucan_of_match[] = {
+	{ .compatible = "esp,esp32s31-twai", },
 	{ .compatible = "ctu,ctucanfd-2", },
 	{ .compatible = "ctu,ctucanfd", },
 	{ /* end of list */ },
