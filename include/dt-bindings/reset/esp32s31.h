@@ -28,6 +28,9 @@
 #define ESP_S31_RST_SDMMC	7
 
 #define ESP_S31_RST_RMT		8
-#define ESP_S31_RST_NUM		9
+/* TWAI0/1 resets (HP_SYS_CLKRST TWAIx_CTRL0). */
+#define ESP_S31_RST_TWAI0	9
+#define ESP_S31_RST_TWAI1	10
+#define ESP_S31_RST_NUM		11
 
 #endif /* ESP32S31_RESET_H */

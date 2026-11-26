@@ -57,6 +57,11 @@
 
 #define ESP_S31_CLK_RMT_APB	22
 #define ESP_S31_CLK_RMT		23
-#define ESP_S31_CLK_NUM		24
+/* TWAI0/1 APB and core clocks (HP_SYS_CLKRST TWAIx_CTRL0). */
+#define ESP_S31_CLK_TWAI0_APB	24
+#define ESP_S31_CLK_TWAI0	25
+#define ESP_S31_CLK_TWAI1_APB	26
+#define ESP_S31_CLK_TWAI1	27
+#define ESP_S31_CLK_NUM		28
 
 #endif /* ESP32S31_CLOCK_H */
