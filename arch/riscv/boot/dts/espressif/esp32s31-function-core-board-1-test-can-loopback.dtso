@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/* Isolated self-test: assign each TX and RX to the same unused header pad.
+ * GPIO35/36 must be unconnected. This is not a physical CAN bus.
+ */
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/pinctrl/esp32s31-iomux.h>
+
+&espfunc {
+	twai0_loopback: twai0-loopback-pins {
+		pinmux = <ESP_PINMUX(35, ESP_FUNC_S31_TWAI0_LOOPBACK_ID)>;
+		input-enable;
+		bias-pull-up;
+		drive-strength = <5>;
+	};
+
+	twai1_loopback: twai1-loopback-pins {
+		pinmux = <ESP_PINMUX(36, ESP_FUNC_S31_TWAI1_LOOPBACK_ID)>;
+		input-enable;
+		bias-pull-up;
+		drive-strength = <5>;
+	};
+};
+
+&twai0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&twai0_loopback>;
+	status = "okay";
+};
+
+&twai1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&twai1_loopback>;
+	status = "okay";
+};

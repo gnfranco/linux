@@ -285,6 +285,30 @@
 			reg = <0x20589000 0x100>;
 		};
 
+		twai0: can@20394000 {
+			compatible = "esp,esp32s31-twai";
+			reg = <0x20394000 0x1000>;
+			interrupt-parent = <&intmtx>;
+			interrupts = <18 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&clk ESP_S31_CLK_TWAI0_APB>,
+				 <&clk ESP_S31_CLK_TWAI0>;
+			clock-names = "apb", "core";
+			resets = <&rst ESP_S31_RST_TWAI0>;
+			status = "disabled";
+		};
+
+		twai1: can@20395000 {
+			compatible = "esp,esp32s31-twai";
+			reg = <0x20395000 0x1000>;
+			interrupt-parent = <&intmtx>;
+			interrupts = <20 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&clk ESP_S31_CLK_TWAI1_APB>,
+				 <&clk ESP_S31_CLK_TWAI1>;
+			clock-names = "apb", "core";
+			resets = <&rst ESP_S31_RST_TWAI1>;
+			status = "disabled";
+		};
+
 		i2c0: i2c@20385000 {
 			compatible = "esp,esp32s31-i2c";
 			reg = <0x20385000 0x1000>;
