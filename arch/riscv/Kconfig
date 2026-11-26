@@ -898,6 +898,16 @@ config FPU
 
 	  If you don't know what to do here, say Y.
 
+config RISCV_EXPERIMENTAL_F_ONLY
+	bool "Experimental RV32 single-precision-only userspace FPU"
+	depends on 32BIT && FPU && ARCH_ESPRESSIF && !KVM
+	help
+	  Enable experimental userspace context switching for homogeneous
+	  RV32 Espressif harts with F but without D. Keep disabled unless
+	  testing on a platform whose ISA and FP context have been verified.
+	  The existing D path remains unchanged. Kernel-mode FP acceleration
+	  still requires D. This is not a generic production configuration.
+
 config IRQ_STACKS
 	bool "Independent irq & softirq stacks" if EXPERT
 	default y

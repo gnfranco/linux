@@ -77,7 +77,8 @@ static void hwprobe_isa_ext0(struct riscv_hwprobe *pair,
 	u64 missing = 0;
 
 	pair->value = 0;
-	if (has_fpu())
+	/* This bit means BOTH F and D, not simply an available FPU. */
+	if (has_fpu() && riscv_has_extension_likely(RISCV_ISA_EXT_d))
 		pair->value |= RISCV_HWPROBE_IMA_FD;
 
 	if (riscv_isa_extension_available(NULL, c))
@@ -163,12 +164,15 @@ static void hwprobe_isa_ext0(struct riscv_hwprobe *pair,
 			EXT_KEY(ZVKT);
 		}
 
-		EXT_KEY(ZCD);
-		EXT_KEY(ZCF);
-		EXT_KEY(ZFA);
-		EXT_KEY(ZFBFMIN);
-		EXT_KEY(ZFH);
-		EXT_KEY(ZFHMIN);
+		if (has_fpu()) {
+			if (riscv_has_extension_likely(RISCV_ISA_EXT_d))
+				EXT_KEY(ZCD);
+			EXT_KEY(ZCF);
+			EXT_KEY(ZFA);
+			EXT_KEY(ZFBFMIN);
+			EXT_KEY(ZFH);
+			EXT_KEY(ZFHMIN);
+		}
 
 		if (IS_ENABLED(CONFIG_RISCV_ISA_SUPM))
 			EXT_KEY(SUPM);

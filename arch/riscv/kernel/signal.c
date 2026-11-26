@@ -49,6 +49,7 @@ static long restore_fp_state(struct pt_regs *regs,
 	if (unlikely(err))
 		return err;
 
+	fstate_normalize(current);
 	fstate_restore(current, regs);
 	return 0;
 }
