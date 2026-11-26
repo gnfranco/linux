@@ -145,7 +145,8 @@ static int riscv_ext_f_validate(const struct riscv_isa_ext_data *data,
 	 * Due to extension ordering, d is checked before f, so no deferral
 	 * is required.
 	 */
-	if (!__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
+	if (!IS_ENABLED(CONFIG_RISCV_EXPERIMENTAL_F_ONLY) &&
+	    !__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_d)) {
 		pr_warn_once("This kernel does not support systems with F but not D\n");
 		return -EINVAL;
 	}
@@ -1077,12 +1078,28 @@ void __init riscv_fill_hwcap(void)
 	}
 
 	/*
-	 * We don't support systems with F but without D, so mask those out
-	 * here.
+	 * Experimental F-only support is limited to homogeneous F-only
+	 * harts.  Do not lose the high half of registers on mixed-width
+	 * systems, and do not advertise F in HWCAP unless we can save it.
 	 */
 	if ((elf_hwcap & COMPAT_HWCAP_ISA_F) && !(elf_hwcap & COMPAT_HWCAP_ISA_D)) {
-		pr_info("This kernel does not support systems with F but not D\n");
-		elf_hwcap &= ~COMPAT_HWCAP_ISA_F;
+		bool f_only = IS_ENABLED(CONFIG_RISCV_EXPERIMENTAL_F_ONLY);
+		int cpu;
+
+		for_each_possible_cpu(cpu)
+			if (__riscv_isa_extension_available(hart_isa[cpu].isa,
+							    RISCV_ISA_EXT_d))
+				f_only = false;
+		if (!f_only) {
+			pr_info("F-only context disabled for this system\n");
+			elf_hwcap &= ~COMPAT_HWCAP_ISA_F;
+			__clear_bit(RISCV_ISA_EXT_f, riscv_isa);
+			__clear_bit(RISCV_ISA_EXT_ZCF, riscv_isa);
+			__clear_bit(RISCV_ISA_EXT_ZFA, riscv_isa);
+			__clear_bit(RISCV_ISA_EXT_ZFBFMIN, riscv_isa);
+			__clear_bit(RISCV_ISA_EXT_ZFH, riscv_isa);
+			__clear_bit(RISCV_ISA_EXT_ZFHMIN, riscv_isa);
+		}
 	}
 
 	if (__riscv_isa_extension_available(NULL, RISCV_ISA_EXT_ZVE32X) ||

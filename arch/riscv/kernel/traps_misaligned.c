@@ -217,6 +217,16 @@ static int handle_vector_misaligned_load(struct pt_regs *regs)
 }
 #endif
 
+/* Do not touch FP registers for an unsupported decoded access width. */
+static bool fp_width_available(int len)
+{
+	if (!IS_ENABLED(CONFIG_FPU))
+		return false;
+	if (len == 8)
+		return riscv_has_extension_likely(RISCV_ISA_EXT_d);
+	return riscv_has_extension_likely(RISCV_ISA_EXT_f);
+}
+
 static int handle_scalar_misaligned_load(struct pt_regs *regs)
 {
 	union reg_data val;
@@ -307,8 +317,10 @@ static int handle_scalar_misaligned_load(struct pt_regs *regs)
 		return -1;
 	}
 
-	if (!IS_ENABLED(CONFIG_FPU) && fp)
+	if (fp && !fp_width_available(len)) {
+		regs->epc = epc;
 		return -EOPNOTSUPP;
+	}
 
 	val.data_u64 = 0;
 	if (user_mode(regs)) {
@@ -362,10 +374,18 @@ static int handle_scalar_misaligned_store(struct pt_regs *regs)
 	} else if ((insn & INSN_MASK_FSD) == INSN_MATCH_FSD) {
 		fp = 1;
 		len = 8;
+		if (!fp_width_available(len)) {
+			regs->epc = epc;
+			return -EOPNOTSUPP;
+		}
 		val.data_u64 = GET_F64_RS2(insn, regs);
 	} else if ((insn & INSN_MASK_FSW) == INSN_MATCH_FSW) {
 		fp = 1;
 		len = 4;
+		if (!fp_width_available(len)) {
+			regs->epc = epc;
+			return -EOPNOTSUPP;
+		}
 		val.data_ulong = GET_F32_RS2(insn, regs);
 	} else if ((insn & INSN_MASK_SH) == INSN_MATCH_SH) {
 		len = 2;
@@ -386,19 +406,35 @@ static int handle_scalar_misaligned_store(struct pt_regs *regs)
 	} else if ((insn & INSN_MASK_C_FSD) == INSN_MATCH_C_FSD) {
 		fp = 1;
 		len = 8;
+		if (!fp_width_available(len)) {
+			regs->epc = epc;
+			return -EOPNOTSUPP;
+		}
 		val.data_u64 = GET_F64_RS2S(insn, regs);
 	} else if ((insn & INSN_MASK_C_FSDSP) == INSN_MATCH_C_FSDSP) {
 		fp = 1;
 		len = 8;
+		if (!fp_width_available(len)) {
+			regs->epc = epc;
+			return -EOPNOTSUPP;
+		}
 		val.data_u64 = GET_F64_RS2C(insn, regs);
 #if !defined(CONFIG_64BIT)
 	} else if ((insn & INSN_MASK_C_FSW) == INSN_MATCH_C_FSW) {
 		fp = 1;
 		len = 4;
+		if (!fp_width_available(len)) {
+			regs->epc = epc;
+			return -EOPNOTSUPP;
+		}
 		val.data_ulong = GET_F32_RS2S(insn, regs);
 	} else if ((insn & INSN_MASK_C_FSWSP) == INSN_MATCH_C_FSWSP) {
 		fp = 1;
 		len = 4;
+		if (!fp_width_available(len)) {
+			regs->epc = epc;
+			return -EOPNOTSUPP;
+		}
 		val.data_ulong = GET_F32_RS2C(insn, regs);
 #endif
 	} else if ((insn & INSN_MASK_C_SH) == INSN_MATCH_C_SH) {
@@ -409,8 +445,10 @@ static int handle_scalar_misaligned_store(struct pt_regs *regs)
 		return -1;
 	}
 
-	if (!IS_ENABLED(CONFIG_FPU) && fp)
+	if (fp && !fp_width_available(len)) {
+		regs->epc = epc;
 		return -EOPNOTSUPP;
+	}
 
 	if (user_mode(regs)) {
 		if (copy_to_user((u8 __user *)addr, &val, len))
