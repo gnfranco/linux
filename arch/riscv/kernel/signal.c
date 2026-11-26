@@ -46,10 +46,11 @@ static long restore_fp_state(struct pt_regs *regs,
 	struct __riscv_d_ext_state __user *state = &sc_fpregs->d;
 
 	err = __copy_from_user(&current->thread.fstate, state, sizeof(*state));
+	/* Normalize even if the user copy faults after a partial write. */
+	fstate_normalize(current);
 	if (unlikely(err))
 		return err;
 
-	fstate_normalize(current);
 	fstate_restore(current, regs);
 	return 0;
 }
