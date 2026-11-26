@@ -599,4 +599,8 @@
 #define ESP_FUNC_S31_RMT_TX2_ID			42
 #define ESP_FUNC_S31_RMT_TX3_ID			43
 
+/* Bidirectional matrix paths for isolated single-node TWAI self-test. */
+#define ESP_FUNC_S31_TWAI0_LOOPBACK_ID		44
+#define ESP_FUNC_S31_TWAI1_LOOPBACK_ID		45
+
 #endif /* ESP32S31_IOMUX_H */

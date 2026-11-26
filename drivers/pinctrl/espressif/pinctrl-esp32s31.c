@@ -246,6 +246,10 @@ static const struct esp_pin_function esp32s31_functions[] = {
 	[ESP_FUNC_S31_RMT_TX1_ID] = { GPIO_FUNC_GPIO, ESP_FUNC_NONE, RMT_SIG_OUT1_IDX },
 	[ESP_FUNC_S31_RMT_TX2_ID] = { GPIO_FUNC_GPIO, ESP_FUNC_NONE, RMT_SIG_OUT2_IDX },
 	[ESP_FUNC_S31_RMT_TX3_ID] = { GPIO_FUNC_GPIO, ESP_FUNC_NONE, RMT_SIG_OUT3_IDX },
+	[ESP_FUNC_S31_TWAI0_LOOPBACK_ID] = { GPIO_FUNC_GPIO, TWAI0_RX_IDX,
+					 TWAI0_TX_IDX },
+	[ESP_FUNC_S31_TWAI1_LOOPBACK_ID] = { GPIO_FUNC_GPIO, TWAI1_RX_IDX,
+					 TWAI1_TX_IDX },
 };
 
 static int esp_s31_matrix_set_in(struct esp_pinctrl *epctl, u32 gpio, u32 signal)
