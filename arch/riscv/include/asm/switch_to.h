@@ -18,6 +18,26 @@
 #ifdef CONFIG_FPU
 extern void __fstate_save(struct task_struct *save_to);
 extern void __fstate_restore(struct task_struct *restore_from);
+extern void __fstate_save_f(struct task_struct *save_to);
+extern void __fstate_restore_f(struct task_struct *restore_from);
+
+static inline bool fstate_single_precision(void)
+{
+	return IS_ENABLED(CONFIG_RISCV_EXPERIMENTAL_F_ONLY) &&
+	       riscv_has_extension_likely(RISCV_ISA_EXT_f) &&
+	       !riscv_has_extension_likely(RISCV_ISA_EXT_d);
+}
+
+/* Preserve the existing 64-bit UAPI slots; F-only upper words are zero. */
+static inline void fstate_normalize(struct task_struct *task)
+{
+	if (fstate_single_precision()) {
+		int i;
+
+		for (i = 0; i < 32; i++)
+			task->thread.fstate.f[i] = (u32)task->thread.fstate.f[i];
+	}
+}
 
 static inline void __fstate_clean(struct pt_regs *regs)
 {
@@ -34,7 +54,10 @@ static inline void fstate_save(struct task_struct *task,
 			       struct pt_regs *regs)
 {
 	if ((regs->status & SR_FS) == SR_FS_DIRTY) {
-		__fstate_save(task);
+		if (fstate_single_precision())
+			__fstate_save_f(task);
+		else
+			__fstate_save(task);
 		__fstate_clean(regs);
 	}
 }
@@ -43,7 +66,10 @@ static inline void fstate_restore(struct task_struct *task,
 				  struct pt_regs *regs)
 {
 	if ((regs->status & SR_FS) != SR_FS_OFF) {
-		__fstate_restore(task);
+		if (fstate_single_precision())
+			__fstate_restore_f(task);
+		else
+			__fstate_restore(task);
 		__fstate_clean(regs);
 	}
 }

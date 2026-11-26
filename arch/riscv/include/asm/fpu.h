@@ -8,7 +8,8 @@
 
 #include <asm/switch_to.h>
 
-#define kernel_fpu_available()	has_fpu()
+#define kernel_fpu_available()	(has_fpu() && \
+					 riscv_has_extension_likely(RISCV_ISA_EXT_d))
 
 void kernel_fpu_begin(void);
 void kernel_fpu_end(void);

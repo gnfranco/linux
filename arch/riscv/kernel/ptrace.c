@@ -83,6 +83,9 @@ static int riscv_fpr_set(struct task_struct *target,
 					 sizeof(fstate->fcsr));
 	}
 
+	if (!ret)
+		fstate_normalize(target);
+
 	return ret;
 }
 #endif
