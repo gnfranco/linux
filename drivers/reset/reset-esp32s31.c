@@ -20,6 +20,8 @@
 #define ESP32S31_HP_CLKRST_RMT_CTRL0	0x0bc
 #define ESP32S31_HP_CLKRST_I2C0_CTRL0	0x0dc
 #define ESP32S31_HP_CLKRST_I2C1_CTRL0	0x0e0
+#define ESP32S31_HP_CLKRST_TWAI0_CTRL0	0x10c
+#define ESP32S31_HP_CLKRST_TWAI1_CTRL0	0x110
 #define ESP32S31_HP_CLKRST_IOMUX_CTRL0	0x15c
 #define ESP32S31_HP_CLKRST_PCNT_CTRL0	0x138
 
@@ -93,6 +95,14 @@ static const struct esp_s31_rst_desc esp_s31_rst_descs[ESP_S31_RST_NUM] = {
 	[ESP_S31_RST_RMT] = {
 		.reg = ESP32S31_HP_CLKRST_RMT_CTRL0,
 		.mask = BIT(1),
+	},
+	[ESP_S31_RST_TWAI0] = {
+		.reg = ESP32S31_HP_CLKRST_TWAI0_CTRL0,
+		.mask = BIT(4),
+	},
+	[ESP_S31_RST_TWAI1] = {
+		.reg = ESP32S31_HP_CLKRST_TWAI1_CTRL0,
+		.mask = BIT(4),
 	},
 };
 

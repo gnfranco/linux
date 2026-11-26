@@ -25,6 +25,8 @@
 #define ESP32S31_HP_CLKRST_EMAC_CTRL0	0x0c8
 #define ESP32S31_HP_CLKRST_I2C0_CTRL0	0x0dc
 #define ESP32S31_HP_CLKRST_I2C1_CTRL0	0x0e0
+#define ESP32S31_HP_CLKRST_TWAI0_CTRL0	0x10c
+#define ESP32S31_HP_CLKRST_TWAI1_CTRL0	0x110
 #define ESP32S31_HP_CLKRST_IOMUX_CTRL0	0x15c
 #define ESP32S31_HP_CLKRST_PCNT_CTRL0	0x138
 #define ESP32S31_HP_CLKRST_SDIO_HOST_CTRL0	0x0c0
@@ -428,6 +430,8 @@ static const u16 esp32s31_i2c_parent_ids[] = {
 
 static const char * const esp32s31_rmt_parents[] = { "xtal" };
 
+static const char * const esp32s31_twai_parents[] = { "xtal" };
+
 static const struct esp_clk_desc esp32s31_clk_descs[] = {
 	[ESP_S31_CLK_IOMUX_APB] = {
 		.name = "iomux_apb",
@@ -559,6 +563,38 @@ static const struct esp_clk_desc esp32s31_clk_descs[] = {
 		.prepare_clear = GENMASK(4, 3) | GENMASK(29, 6),
 		.parents = esp32s31_rmt_parents,
 		.num_parents = ARRAY_SIZE(esp32s31_rmt_parents),
+	},
+	[ESP_S31_CLK_TWAI0_APB] = {
+		.name = "twai0_apb",
+		.reg = ESP32S31_HP_CLKRST_TWAI0_CTRL0,
+		.gate = BIT(0),
+		.parent_ids = esp32s31_apb_parent_ids,
+		.num_parents = ARRAY_SIZE(esp32s31_apb_parent_ids),
+	},
+	[ESP_S31_CLK_TWAI0] = {
+		.name = "twai0",
+		.reg = ESP32S31_HP_CLKRST_TWAI0_CTRL0,
+		.gate = BIT(3),
+		/* Select the XTAL source (selector 0). */
+		.prepare_clear = GENMASK(2, 1),
+		.parents = esp32s31_twai_parents,
+		.num_parents = ARRAY_SIZE(esp32s31_twai_parents),
+	},
+	[ESP_S31_CLK_TWAI1_APB] = {
+		.name = "twai1_apb",
+		.reg = ESP32S31_HP_CLKRST_TWAI1_CTRL0,
+		.gate = BIT(0),
+		.parent_ids = esp32s31_apb_parent_ids,
+		.num_parents = ARRAY_SIZE(esp32s31_apb_parent_ids),
+	},
+	[ESP_S31_CLK_TWAI1] = {
+		.name = "twai1",
+		.reg = ESP32S31_HP_CLKRST_TWAI1_CTRL0,
+		.gate = BIT(3),
+		/* Select the XTAL source (selector 0). */
+		.prepare_clear = GENMASK(2, 1),
+		.parents = esp32s31_twai_parents,
+		.num_parents = ARRAY_SIZE(esp32s31_twai_parents),
 	},
 };
 
