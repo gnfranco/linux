@@ -128,8 +128,10 @@ static inline dma_addr_t dma_direct_map_phys(struct device *dev,
 	if (!dev_is_dma_coherent(dev) &&
 	    !(attrs & (DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_MMIO)))
 		arch_sync_dma_for_device(phys, size, dir);
+#ifdef CONFIG_S31_DMA_DIAGNOSTICS
 	if (!(attrs & DMA_ATTR_MMIO))
 		s31_dma_diag_record(dev, dir, size, S31_DMA_DIRECT);
+#endif
 	return dma_addr;
 
 err_overflow:

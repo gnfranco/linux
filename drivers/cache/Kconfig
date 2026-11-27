@@ -23,7 +23,7 @@ config ESP32S31_CACHE
 
 config S31_DMA_DIAGNOSTICS
 	bool "ESP32-S31 experimental DMA path counters"
-	depends on ESP32S31_CACHE && DEBUG_FS && DMA_BOUNCE_UNALIGNED_KMALLOC
+	depends on ESP32S31_CACHE && DEBUG_FS
 	help
 	  Collect bounded per-CPU counts of non-coherent DMA mapping paths
 	  and DWC2 temporary buffers for laboratory A/B experiments.

@@ -7,19 +7,22 @@
 #include <linux/init.h>
 #include <linux/irqflags.h>
 #include <linux/limits.h>
+#include <linux/of.h>
 #include <linux/percpu.h>
 #include <linux/s31-dma-diag.h>
 #include <linux/seq_file.h>
-#include <linux/string.h>
 
-#define S31_DIAG_DEVICES	8
-#define S31_DIAG_NAME	48
 #define S31_DIAG_BINS	6
 #define S31_DIAG_DIRS	3
 
+enum s31_dma_diag_device {
+	S31_DIAG_USB,
+	S31_DIAG_EMAC,
+	S31_DIAG_OTHER,
+	S31_DIAG_DEVICES,
+};
+
 struct s31_dma_diag_slot {
-	bool valid;
-	char name[S31_DIAG_NAME];
 	u32 count[S31_DIAG_DIRS][S31_DIAG_BINS][S31_DMA_EVENT_COUNT];
 };
 
@@ -30,6 +33,7 @@ struct s31_dma_diag_cpu {
 
 static DEFINE_PER_CPU(struct s31_dma_diag_cpu, s31_dma_diag);
 
+static const char * const device_name[] = { "usb", "emac", "other" };
 static const char * const bin_name[] = {
 	"0-16", "17-32", "33-64", "65-96", "97-127", "128+",
 };
@@ -62,41 +66,40 @@ static void s31_dma_diag_inc(u32 *count)
 		WRITE_ONCE(*count, value + 1);
 }
 
+/*
+ * Use fixed labels for the single USB and EMAC nodes in the S31 DT.
+ * Do not read mutable kobject names in DMA/interrupt context.
+ */
+static enum s31_dma_diag_device s31_dma_diag_device(struct device *dev)
+{
+	if (of_device_is_compatible(dev->of_node, "esp,esp32s31-hsotg"))
+		return S31_DIAG_USB;
+	if (of_device_is_compatible(dev->of_node, "esp,esp32s31-dwmac"))
+		return S31_DIAG_EMAC;
+	return S31_DIAG_OTHER;
+}
+
 void s31_dma_diag_record(struct device *dev, enum dma_data_direction dir,
 			 size_t size, enum s31_dma_diag_event event)
 {
 	struct s31_dma_diag_cpu *cpu;
 	struct s31_dma_diag_slot *slot;
+	enum s31_dma_diag_device id;
 	unsigned long flags;
-	const char *name;
-	unsigned int i;
 
 	if (dev_is_dma_coherent(dev))
 		return;
 
-	name = dev_name(dev);
+	id = s31_dma_diag_device(dev);
 	cpu = get_cpu_ptr(&s31_dma_diag);
 	local_irq_save(flags);
-	if (!name || !*name || strlen(name) >= S31_DIAG_NAME ||
-	    (unsigned int)dir >= S31_DIAG_DIRS ||
-	    (unsigned int)event >= S31_DMA_EVENT_COUNT)
-		goto lost;
-
-	for (i = 0; i < S31_DIAG_DEVICES; i++) {
-		slot = &cpu->slot[i];
-		if (!slot->valid) {
-			strscpy(slot->name, name, sizeof(slot->name));
-			/* Publish the immutable name before readers see the slot. */
-			smp_store_release(&slot->valid, true);
-		} else if (strcmp(slot->name, name)) {
-			continue;
-		}
+	if ((unsigned int)dir >= S31_DIAG_DIRS ||
+	    (unsigned int)event >= S31_DMA_EVENT_COUNT) {
+		s31_dma_diag_inc(&cpu->lost);
+	} else {
+		slot = &cpu->slot[id];
 		s31_dma_diag_inc(&slot->count[dir][s31_dma_diag_bin(size)][event]);
-		goto out;
 	}
-lost:
-	s31_dma_diag_inc(&cpu->lost);
-out:
 	local_irq_restore(flags);
 	put_cpu_ptr(&s31_dma_diag);
 }
@@ -104,14 +107,10 @@ EXPORT_SYMBOL_GPL(s31_dma_diag_record);
 
 static void s31_dma_diag_show_slot(struct seq_file *s,
 				   const struct s31_dma_diag_slot *slot,
-				   unsigned int cpu)
+				   unsigned int cpu, unsigned int device)
 {
 	unsigned int dir, bin, event;
 	u32 count;
-
-	/* Pairs with publication of the immutable device name. */
-	if (!smp_load_acquire(&slot->valid))
-		return;
 
 	for (dir = 0; dir < S31_DIAG_DIRS; dir++)
 		for (bin = 0; bin < S31_DIAG_BINS; bin++)
@@ -119,7 +118,7 @@ static void s31_dma_diag_show_slot(struct seq_file *s,
 				count = READ_ONCE(slot->count[dir][bin][event]);
 				if (count)
 					seq_printf(s, "%u %s %s %s %s %u\n",
-						   cpu, slot->name, dir_name[dir],
+						   cpu, device_name[device], dir_name[dir],
 						   bin_name[bin], event_name[event],
 						   count);
 			}
@@ -135,7 +134,7 @@ static int s31_dma_diag_show(struct seq_file *s, void *unused)
 		cpu = per_cpu_ptr(&s31_dma_diag, idx);
 		seq_printf(s, "# lost %u %u\n", idx, READ_ONCE(cpu->lost));
 		for (i = 0; i < S31_DIAG_DEVICES; i++)
-			s31_dma_diag_show_slot(s, &cpu->slot[i], idx);
+			s31_dma_diag_show_slot(s, &cpu->slot[i], idx, i);
 	}
 	return 0;
 }

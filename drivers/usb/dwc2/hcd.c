@@ -2517,11 +2517,13 @@ static int dwc2_map_urb_for_dma(struct usb_hcd *hcd, struct urb *urb,
 		     (urb->setup_dma & (DWC2_USB_DMA_ALIGN - 1)));
 
 	ret = dwc2_alloc_dma_aligned_buffer(urb, mem_flags);
+#ifdef CONFIG_S31_DMA_DIAGNOSTICS
 	if (ret || (urb->transfer_flags & URB_ALIGNED_TEMP_BUFFER))
 		s31_dma_diag_record(hcd->self.sysdev,
 				    usb_urb_dir_in(urb) ? DMA_FROM_DEVICE : DMA_TO_DEVICE,
 				    urb->transfer_buffer_length,
 				    ret ? S31_DMA_DWC2_TEMP_FAIL : S31_DMA_DWC2_TEMP_OK);
+#endif
 	if (ret)
 		return ret;
 
