@@ -9,6 +9,10 @@
 #include <linux/module.h>
 #include <linux/dma-direct.h>
 #include <linux/dma-map-ops.h>
+#ifdef CONFIG_S31_DMA_ARENA_PROOF
+#include <linux/genalloc.h>
+#include <linux/of.h>
+#endif
 #ifdef CONFIG_DMA_GLOBAL_POOL_STATS
 #include <linux/bitmap.h>
 #include <linux/debugfs.h>
@@ -151,7 +155,8 @@ void dma_release_coherent_memory(struct device *dev)
 
 static void *__dma_alloc_from_coherent(struct device *dev,
 				       struct dma_coherent_mem *mem,
-				       ssize_t size, dma_addr_t *dma_handle)
+				       ssize_t size, dma_addr_t *dma_handle,
+				       unsigned long reserve_pages)
 {
 	int order = get_order(size);
 	unsigned long flags;
@@ -162,6 +167,18 @@ static void *__dma_alloc_from_coherent(struct device *dev,
 
 	if (unlikely(size > ((dma_addr_t)mem->size << PAGE_SHIFT)))
 		goto err;
+
+	/* Optional CPU-only lab reservation: check headroom atomically. */
+	if (reserve_pages) {
+		unsigned long free = mem->size - bitmap_weight(mem->bitmap,
+							      mem->size);
+
+		if (free < reserve_pages ||
+		    (1UL << order) > free - reserve_pages) {
+			spin_unlock_irqrestore(&mem->spinlock, flags);
+			return NULL;
+		}
+	}
 
 	pageno = bitmap_find_free_region(mem->bitmap, mem->size, order);
 	if (unlikely(pageno < 0))
@@ -175,8 +192,9 @@ static void *__dma_alloc_from_coherent(struct device *dev,
 	/*
 	 * Memory was found in the coherent area.
 	 */
-	*dma_handle = dma_get_device_base(dev, mem) +
-			((dma_addr_t)pageno << PAGE_SHIFT);
+	if (dma_handle)
+		*dma_handle = dma_get_device_base(dev, mem) +
+				((dma_addr_t)pageno << PAGE_SHIFT);
 	ret = mem->virt_base + ((dma_addr_t)pageno << PAGE_SHIFT);
 	spin_unlock_irqrestore(&mem->spinlock, flags);
 	memset(ret, 0, size);
@@ -211,7 +229,7 @@ int dma_alloc_from_dev_coherent(struct device *dev, ssize_t size,
 	if (!mem)
 		return 0;
 
-	*ret = __dma_alloc_from_coherent(dev, mem, size, dma_handle);
+	*ret = __dma_alloc_from_coherent(dev, mem, size, dma_handle, 0);
 	return 1;
 }
 
@@ -366,7 +384,7 @@ void *dma_alloc_from_global_coherent(struct device *dev, ssize_t size,
 		return NULL;
 
 	return __dma_alloc_from_coherent(dev, dma_coherent_default_memory, size,
-					 dma_handle);
+					 dma_handle, 0);
 }
 
 int dma_release_from_global_coherent(int order, void *vaddr)
@@ -387,6 +405,103 @@ int dma_mmap_from_global_coherent(struct vm_area_struct *vma, void *vaddr,
 	return __dma_mmap_from_coherent(dma_coherent_default_memory, vma,
 					vaddr, size, ret);
 }
+
+#ifdef CONFIG_S31_DMA_ARENA_PROOF
+/*
+ * CPU-only ownership proof. Do not use a fictitious DMA device: the
+ * NULL handle deliberately skips device address translation. Never
+ * expose the pool or the acquired extent outside this test.
+ */
+static int __init s31_dma_arena_proof(void)
+{
+	struct dma_coherent_mem *mem = dma_coherent_default_memory;
+	const size_t bytes = 4 * PAGE_SIZE;
+	struct genpool_data_align align_a = { .align = 64 };
+	struct genpool_data_align align_b = { .align = 256 };
+	struct gen_pool *pool;
+	unsigned long a = 0, b = 0, extra = 0;
+	void *base, *denied;
+	bool pass = false, released;
+
+	if (!of_machine_is_compatible("esp,esp32s31") ||
+	    !IS_ENABLED(CONFIG_PAGE_SIZE_4KB) || !mem || mem->size != 64 ||
+	    PFN_PHYS(mem->pfn_base) != 0x2f030000) {
+		pr_info("s31-dma-arena: SKIP unsupported layout\n");
+		return 0;
+	}
+
+	/* Impossible floor must deny without consuming a page. */
+	denied = __dma_alloc_from_coherent(NULL, mem, bytes, NULL, 64);
+	if (denied) {
+		/* Complete the allocation's zeroing before returning pages. */
+		mb();
+		__dma_release_from_coherent(mem, get_order(bytes), denied);
+		pr_err("s31-dma-arena: FAIL headroom policy\n");
+		return 0;
+	}
+	base = __dma_alloc_from_coherent(NULL, mem, bytes, NULL, 48);
+	if (!base) {
+		pr_info("s31-dma-arena: SKIP insufficient headroom or extent\n");
+		return 0;
+	}
+	/* Complete initial WC writes before inspecting the arena. */
+	mb();
+	if (memchr_inv(base, 0, bytes))
+		goto out_release;
+	pool = gen_pool_create(6, -1);
+	if (!pool)
+		goto out_release;
+	if (gen_pool_add(pool, (unsigned long)base, bytes, -1))
+		goto out_destroy;
+
+	a = gen_pool_alloc_algo(pool, 1600, gen_pool_first_fit_align,
+				&align_a);
+	b = gen_pool_alloc_algo(pool, 500, gen_pool_first_fit_align,
+				&align_b);
+	if (!a || !b || !IS_ALIGNED(a, 64) || !IS_ALIGNED(b, 256) ||
+	    (a < b + 512 && b < a + 1600) ||
+	    gen_pool_avail(pool) != bytes - 1600 - 512)
+		goto out_free;
+	memset((void *)a, 0xa5, 1600);
+	memset((void *)b, 0x5a, 500);
+	/* Order WC pattern writes before the readback. */
+	mb();
+	if (memchr_inv((void *)a, 0xa5, 1600) ||
+	    memchr_inv((void *)b, 0x5a, 500))
+		goto out_free;
+
+	/* All remaining space is smaller than the original arena. */
+	extra = gen_pool_alloc(pool, bytes);
+	if (extra)
+		goto out_free;
+	pass = true;
+out_free:
+	if (extra)
+		gen_pool_free(pool, extra, bytes);
+	if (b)
+		gen_pool_free(pool, b, 500);
+	if (a)
+		gen_pool_free(pool, a, 1600);
+	if (gen_pool_avail(pool) != bytes)
+		pass = false;
+out_destroy:
+	gen_pool_destroy(pool);
+out_release:
+	memset(base, 0, bytes);
+	/* Finish scrubbing before readback and returning ownership. */
+	mb();
+	if (memchr_inv(base, 0, bytes))
+		pass = false;
+	released = __dma_release_from_coherent(mem, get_order(bytes), base);
+	if (pass && released)
+		pr_info("s31-dma-arena: PASS bytes=%zu floor_pages=48\n",
+			bytes);
+	else
+		pr_err("s31-dma-arena: FAIL allocation or cleanup\n");
+	return 0;
+}
+late_initcall(s31_dma_arena_proof);
+#endif
 
 int dma_init_global_coherent(phys_addr_t phys_addr, size_t size)
 {

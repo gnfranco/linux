@@ -152,6 +152,18 @@ config DMA_GLOBAL_POOL_STATS
 	  Intended for platform qualification, not a stable ABI.
 	  Statistics are read-only and do not reserve DMA memory.
 
+config S31_DMA_ARENA_PROOF
+	bool "ESP32-S31 kernel SRAM arena proof (experimental)"
+	depends on ARCH_ESPRESSIF && OF && DMA_GLOBAL_POOL_STATS
+	select GENERIC_ALLOCATOR
+	help
+	  Run a one-shot, CPU-only test of a bounded kernel-owned SRAM
+	  arena on the ESP32-S31 Lab memory layout. Reserve four pages
+	  from the shared coherent pool only if at least 48 pages remain
+	  free, test aligned subdivisions, scrub and release all pages.
+	  No device DMA address or userspace mapping is provided.
+	  Say N unless building a dedicated qualification image.
+
 config DMA_DIRECT_REMAP
 	bool
 	select DMA_COHERENT_POOL
