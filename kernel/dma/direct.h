@@ -9,6 +9,7 @@
 
 #include <linux/dma-direct.h>
 #include <linux/memremap.h>
+#include <linux/s31-dma-diag.h>
 
 int dma_direct_get_sgtable(struct device *dev, struct sg_table *sgt,
 		void *cpu_addr, dma_addr_t dma_addr, size_t size,
@@ -90,7 +91,10 @@ static inline dma_addr_t dma_direct_map_phys(struct device *dev,
 		if (attrs & DMA_ATTR_MMIO)
 			goto err_overflow;
 
-		return swiotlb_map(dev, phys, size, dir, attrs);
+		dma_addr = swiotlb_map(dev, phys, size, dir, attrs);
+		s31_dma_diag_record(dev, dir, size, dma_addr == DMA_MAPPING_ERROR ?
+				    S31_DMA_FORCE_FAIL : S31_DMA_FORCE_OK);
+		return dma_addr;
 	}
 
 	if (attrs & DMA_ATTR_MMIO) {
@@ -98,12 +102,25 @@ static inline dma_addr_t dma_direct_map_phys(struct device *dev,
 		if (unlikely(!dma_capable(dev, dma_addr, size, false)))
 			goto err_overflow;
 	} else {
-		dma_addr = phys_to_dma(dev, phys);
-		if (unlikely(!dma_capable(dev, dma_addr, size, true)) ||
-		    dma_kmalloc_needs_bounce(dev, size, dir)) {
-			if (is_swiotlb_active(dev))
-				return swiotlb_map(dev, phys, size, dir, attrs);
+		bool addr_limited;
 
+		dma_addr = phys_to_dma(dev, phys);
+		addr_limited = unlikely(!dma_capable(dev, dma_addr, size, true));
+		if (addr_limited || dma_kmalloc_needs_bounce(dev, size, dir)) {
+			if (is_swiotlb_active(dev)) {
+				dma_addr_t mapped = swiotlb_map(dev, phys, size, dir, attrs);
+
+				s31_dma_diag_record(dev, dir, size,
+					addr_limited ?
+					(mapped == DMA_MAPPING_ERROR ? S31_DMA_ADDR_FAIL :
+					 S31_DMA_ADDR_OK) :
+					(mapped == DMA_MAPPING_ERROR ? S31_DMA_ALIGN_FAIL :
+					 S31_DMA_ALIGN_OK));
+				return mapped;
+			}
+
+			s31_dma_diag_record(dev, dir, size, addr_limited ?
+					    S31_DMA_ADDR_FAIL : S31_DMA_ALIGN_FAIL);
 			goto err_overflow;
 		}
 	}
@@ -111,6 +128,8 @@ static inline dma_addr_t dma_direct_map_phys(struct device *dev,
 	if (!dev_is_dma_coherent(dev) &&
 	    !(attrs & (DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_MMIO)))
 		arch_sync_dma_for_device(phys, size, dir);
+	if (!(attrs & DMA_ATTR_MMIO))
+		s31_dma_diag_record(dev, dir, size, S31_DMA_DIRECT);
 	return dma_addr;
 
 err_overflow:

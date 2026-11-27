@@ -9,6 +9,7 @@
  * This file contains the core HCD code, and implements the Linux hc_driver
  * API
  */
+#include <linux/s31-dma-diag.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/spinlock.h>
@@ -2516,6 +2517,11 @@ static int dwc2_map_urb_for_dma(struct usb_hcd *hcd, struct urb *urb,
 		     (urb->setup_dma & (DWC2_USB_DMA_ALIGN - 1)));
 
 	ret = dwc2_alloc_dma_aligned_buffer(urb, mem_flags);
+	if (ret || (urb->transfer_flags & URB_ALIGNED_TEMP_BUFFER))
+		s31_dma_diag_record(hcd->self.sysdev,
+				    usb_urb_dir_in(urb) ? DMA_FROM_DEVICE : DMA_TO_DEVICE,
+				    urb->transfer_buffer_length,
+				    ret ? S31_DMA_DWC2_TEMP_FAIL : S31_DMA_DWC2_TEMP_OK);
 	if (ret)
 		return ret;
 
