@@ -9,6 +9,14 @@
 #include <linux/module.h>
 #include <linux/dma-direct.h>
 #include <linux/dma-map-ops.h>
+#ifdef CONFIG_S31_WIFI_SRAM_SESSION
+#include <linux/capability.h>
+#include <linux/fs.h>
+#include <linux/miscdevice.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
+#include <linux/uaccess.h>
+#endif
 #ifdef CONFIG_S31_DMA_ARENA_PROOF
 #include <linux/genalloc.h>
 #include <linux/of.h>
@@ -501,6 +509,188 @@ out_release:
 	return 0;
 }
 late_initcall(s31_dma_arena_proof);
+#endif
+
+#ifdef CONFIG_S31_WIFI_SRAM_SESSION
+#define S31_SESSION_BYTES (4 * PAGE_SIZE)
+
+/*
+ * Experimental CPU-only lease. An ordinary file reference is held by
+ * each mapped VMA, so closing the descriptor alone cannot free the
+ * pages. No DMA address, arbitrary PFN, MMIO or radio access is exposed.
+ * The authorized owner must finish CPU accesses before final unmap.
+ */
+static DEFINE_MUTEX(s31_session_lock);
+static void *s31_session_base;
+static bool s31_session_mapped;
+
+static int s31_session_open(struct inode *inode, struct file *file)
+{
+	struct dma_coherent_mem *mem = dma_coherent_default_memory;
+	void *base;
+	int ret = -EBUSY;
+
+	if (!capable(CAP_SYS_RAWIO) ||
+	    (file->f_mode & (FMODE_READ | FMODE_WRITE)) !=
+	    (FMODE_READ | FMODE_WRITE))
+		return -EPERM;
+
+	mutex_lock(&s31_session_lock);
+	if (s31_session_base)
+		goto out;
+	base = __dma_alloc_from_coherent(NULL, mem, S31_SESSION_BYTES,
+					 NULL, 48);
+	if (!base) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	/* Order initial zeroing before exposing the acquired pages. */
+	mb();
+	s31_session_base = base;
+	file->private_data = base;
+	ret = 0;
+out:
+	mutex_unlock(&s31_session_lock);
+	return ret;
+}
+
+static int s31_session_release(struct inode *inode, struct file *file)
+{
+	void *base = file->private_data;
+
+	mutex_lock(&s31_session_lock);
+	if (WARN_ON_ONCE(base != s31_session_base))
+		goto out;
+	memset(base, 0, S31_SESSION_BYTES);
+	/* Finish scrubbing before another consumer may acquire pages. */
+	mb();
+	if (WARN_ON_ONCE(memchr_inv(base, 0, S31_SESSION_BYTES)))
+		goto out;
+	/*
+	 * Keep every user-mapped extent out of other DMA clients until
+	 * cross-alias visibility and reuse have been qualified on S31.
+	 * Even a failed mapping attempt may have installed some PTEs.
+	 */
+	if (s31_session_mapped) {
+		pr_info("s31-wifi-sram: mapped arena quarantined until reboot\n");
+		goto out;
+	}
+	if (WARN_ON_ONCE(!dma_release_from_global_coherent(
+			get_order(S31_SESSION_BYTES), base)))
+		goto out;
+	s31_session_base = NULL;
+out:
+	mutex_unlock(&s31_session_lock);
+	return 0;
+}
+
+static int s31_session_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	int ret = -ENXIO;
+
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+	if (vma->vm_pgoff || vma_pages(vma) != 4 ||
+	    !(vma->vm_flags & VM_SHARED) ||
+	    (vma->vm_flags & VM_EXEC))
+		return -EINVAL;
+	vm_flags_clear(vma, VM_MAYEXEC);
+	vm_flags_set(vma, VM_IO | VM_DONTCOPY | VM_DONTDUMP | VM_DONTEXPAND);
+	mutex_lock(&s31_session_lock);
+	s31_session_mapped = true;
+	mutex_unlock(&s31_session_lock);
+	/*
+	 * Match the global pool's MEMREMAP_WC policy. On Sv32 this
+	 * does not change PTE cacheability; platform attributes matter.
+	 */
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	if (!dma_mmap_from_global_coherent(vma, file->private_data,
+					  S31_SESSION_BYTES, &ret))
+		return -ENXIO;
+	return ret;
+}
+
+/* Bounded CPU cross-view test only; no concurrent unsynchronized
+ * writes through mapping and file I/O. Normal file references pin
+ * ownership for the duration of these operations.
+ */
+static ssize_t s31_session_read(struct file *file, char __user *buf,
+				size_t count, loff_t *pos)
+{
+	void *tmp;
+	size_t copied;
+
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+	if (*pos < 0)
+		return -EINVAL;
+	if (*pos >= S31_SESSION_BYTES || !count)
+		return 0;
+	count = min_t(size_t, count, S31_SESSION_BYTES - *pos);
+	/* Order a preceding CPU access before cross-view readback. */
+	mb();
+	tmp = kmemdup(file->private_data + *pos, count, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+	copied = count - copy_to_user(buf, tmp, count);
+	kfree(tmp);
+	if (!copied)
+		return -EFAULT;
+	*pos += copied;
+	return copied;
+}
+
+static ssize_t s31_session_write(struct file *file, const char __user *buf,
+				 size_t count, loff_t *pos)
+{
+	void *tmp;
+
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+	if (*pos < 0)
+		return -EINVAL;
+	if (*pos >= S31_SESSION_BYTES || !count)
+		return 0;
+	count = min_t(size_t, count, S31_SESSION_BYTES - *pos);
+	tmp = memdup_user(buf, count);
+	if (IS_ERR(tmp))
+		return PTR_ERR(tmp);
+	memcpy(file->private_data + *pos, tmp, count);
+	kfree(tmp);
+	/* Complete CPU writes before a subsequent mapped readback. */
+	mb();
+	*pos += count;
+	return count;
+}
+
+static const struct file_operations s31_session_fops = {
+	.owner = THIS_MODULE,
+	.open = s31_session_open,
+	.release = s31_session_release,
+	.mmap = s31_session_mmap,
+	.read = s31_session_read,
+	.write = s31_session_write,
+};
+
+static struct miscdevice s31_session_misc = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "s31-wifi-sram-lab",
+	.fops = &s31_session_fops,
+	.mode = 0600,
+};
+
+static int __init s31_session_init(void)
+{
+	struct dma_coherent_mem *mem = dma_coherent_default_memory;
+
+	if (!of_machine_is_compatible("esp,esp32s31") ||
+	    !IS_ENABLED(CONFIG_PAGE_SIZE_4KB) || !mem || mem->size != 64 ||
+	    PFN_PHYS(mem->pfn_base) != 0x2f030000)
+		return -ENODEV;
+
+	return misc_register(&s31_session_misc);
+}
+late_initcall(s31_session_init);
 #endif
 
 int dma_init_global_coherent(phys_addr_t phys_addr, size_t size)

@@ -164,6 +164,18 @@ config S31_DMA_ARENA_PROOF
 	  No device DMA address or userspace mapping is provided.
 	  Say N unless building a dedicated qualification image.
 
+config S31_WIFI_SRAM_SESSION
+	bool "ESP32-S31 experimental CPU-only Wi-Fi SRAM session"
+	depends on ARCH_ESPRESSIF && OF && MMU && DMA_GLOBAL_POOL_STATS
+	help
+	  Allow a privileged lab process to reserve a bounded 16 KiB
+	  CPU-access arena from the existing global pool. The arena
+	  persists until the last file/mapping reference is dropped.
+	  Once mapped to userspace, retain the pages until reboot
+	  pending qualification of cross-alias memory attributes.
+	  No radio device or DMA engine may use the arena yet.
+	  Say N unless building a dedicated qualification image.
+
 config DMA_DIRECT_REMAP
 	bool
 	select DMA_COHERENT_POOL
