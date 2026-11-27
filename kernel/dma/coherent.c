@@ -9,6 +9,12 @@
 #include <linux/module.h>
 #include <linux/dma-direct.h>
 #include <linux/dma-map-ops.h>
+#ifdef CONFIG_DMA_GLOBAL_POOL_STATS
+#include <linux/bitmap.h>
+#include <linux/debugfs.h>
+#include <linux/log2.h>
+#include <linux/seq_file.h>
+#endif
 
 struct dma_coherent_mem {
 	void		*virt_base;
@@ -18,6 +24,11 @@ struct dma_coherent_mem {
 	unsigned long	*bitmap;
 	spinlock_t	spinlock;
 	bool		use_dev_dma_pfn_offset;
+#ifdef CONFIG_DMA_GLOBAL_POOL_STATS
+	unsigned long	used_pages;
+	unsigned long	peak_pages;
+	u64		alloc_failures;
+#endif
 };
 
 static inline struct dma_coherent_mem *dev_get_coherent_memory(struct device *dev)
@@ -156,6 +167,11 @@ static void *__dma_alloc_from_coherent(struct device *dev,
 	if (unlikely(pageno < 0))
 		goto err;
 
+#ifdef CONFIG_DMA_GLOBAL_POOL_STATS
+	mem->used_pages += 1UL << order;
+	mem->peak_pages = max(mem->peak_pages, mem->used_pages);
+#endif
+
 	/*
 	 * Memory was found in the coherent area.
 	 */
@@ -166,6 +182,9 @@ static void *__dma_alloc_from_coherent(struct device *dev,
 	memset(ret, 0, size);
 	return ret;
 err:
+#ifdef CONFIG_DMA_GLOBAL_POOL_STATS
+	mem->alloc_failures++;
+#endif
 	spin_unlock_irqrestore(&mem->spinlock, flags);
 	return NULL;
 }
@@ -206,6 +225,9 @@ static int __dma_release_from_coherent(struct dma_coherent_mem *mem,
 
 		spin_lock_irqsave(&mem->spinlock, flags);
 		bitmap_release_region(mem->bitmap, page, order);
+#ifdef CONFIG_DMA_GLOBAL_POOL_STATS
+		mem->used_pages -= 1UL << order;
+#endif
 		spin_unlock_irqrestore(&mem->spinlock, flags);
 		return 1;
 	}
@@ -278,6 +300,64 @@ int dma_mmap_from_dev_coherent(struct device *dev, struct vm_area_struct *vma,
 
 #ifdef CONFIG_DMA_GLOBAL_POOL
 static struct dma_coherent_mem *dma_coherent_default_memory __ro_after_init;
+
+#ifdef CONFIG_DMA_GLOBAL_POOL_STATS
+static int dma_global_pool_stats_show(struct seq_file *m, void *unused)
+{
+	struct dma_coherent_mem *mem = dma_coherent_default_memory;
+	unsigned long flags, used, tracked, peak, largest = 0;
+	unsigned long total, pages, start;
+	unsigned long *snapshot;
+	u64 failures;
+
+	if (!mem || mem->size <= 0)
+		return -ENODEV;
+
+	total = mem->size;
+	snapshot = bitmap_alloc(total, GFP_KERNEL);
+	if (!snapshot)
+		return -ENOMEM;
+
+	spin_lock_irqsave(&mem->spinlock, flags);
+	bitmap_copy(snapshot, mem->bitmap, total);
+	tracked = mem->used_pages;
+	peak = mem->peak_pages;
+	failures = mem->alloc_failures;
+	spin_unlock_irqrestore(&mem->spinlock, flags);
+
+	used = bitmap_weight(snapshot, total);
+	/* Match the allocator's power-of-two page extent and alignment. */
+	for (pages = rounddown_pow_of_two(total); pages; pages >>= 1) {
+		start = bitmap_find_next_zero_area(snapshot, total, 0,
+						   pages, pages - 1);
+		if (start <= total - pages) {
+			largest = pages;
+			break;
+		}
+	}
+	bitmap_free(snapshot);
+
+	seq_printf(m, "page_bytes %lu\n", PAGE_SIZE);
+	seq_printf(m, "total_pages %lu\n", total);
+	seq_printf(m, "used_pages %lu\n", used);
+	seq_printf(m, "free_pages %lu\n", total - used);
+	seq_printf(m, "tracked_pages %lu\n", tracked);
+	seq_printf(m, "peak_pages %lu\n", peak);
+	seq_printf(m, "largest_allocatable_pages %lu\n", largest);
+	seq_printf(m, "allocation_failures %llu\n", failures);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(dma_global_pool_stats);
+
+static int __init dma_global_pool_stats_init(void)
+{
+	if (dma_coherent_default_memory)
+		debugfs_create_file("dma_global_pool_stats", 0400, NULL, NULL,
+				    &dma_global_pool_stats_fops);
+	return 0;
+}
+late_initcall(dma_global_pool_stats_init);
+#endif
 
 void *dma_alloc_from_global_coherent(struct device *dev, ssize_t size,
 				     dma_addr_t *dma_handle)

@@ -143,6 +143,15 @@ config DMA_GLOBAL_POOL
 	depends on !DMA_DIRECT_REMAP
 	bool
 
+config DMA_GLOBAL_POOL_STATS
+	bool "Global coherent DMA pool statistics"
+	depends on DMA_GLOBAL_POOL && DEBUG_FS
+	help
+	  Expose aggregate page occupancy, peak occupancy, allocation
+	  failures and largest allocatable power-of-two extent in debugfs.
+	  Intended for platform qualification, not a stable ABI.
+	  Statistics are read-only and do not reserve DMA memory.
+
 config DMA_DIRECT_REMAP
 	bool
 	select DMA_COHERENT_POOL
