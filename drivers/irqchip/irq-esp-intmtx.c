@@ -5,6 +5,7 @@
 
 #include <linux/bitmap.h>
 #include <linux/cpumask.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
@@ -243,8 +244,43 @@ err_free:
 	return ret;
 }
 
+static int esp_intmtx_get_state(struct irq_data *d, enum irqchip_irq_state which,
+				bool *state)
+{
+	struct esp_intmtx *priv = irq_data_get_irq_chip_data(d);
+	struct irq_data *parent = d->parent_data;
+	unsigned int cpu, slot, win;
+
+	if (which != IRQCHIP_STATE_MASKED)
+		return -EINVAL;
+	if (priv->nr_windows != INTMTX_NR_CORES || !parent || !parent->chip ||
+	    !parent->chip->irq_get_irqchip_state)
+		return -EOPNOTSUPP;
+
+	if (d->hwirq > INTMTX_MAX_SRC)
+		return -EINVAL;
+
+	/* The descriptor lock excludes affinity changes across the snapshot. */
+	cpu = cpumask_first(irq_data_get_effective_affinity_mask(d));
+	slot = priv->src_to_slot[d->hwirq];
+	if (cpu >= priv->nr_windows || slot < CLIC_SLOT_FIRST ||
+	    slot > CLIC_SLOT_LAST || parent->hwirq != slot)
+		return -EIO;
+
+	for (win = 0; win < INTMTX_NR_CORES; win++) {
+		u32 route = readl(priv->base + INTMTX_WINDOW(win) +
+				  INTMTX_SRC_REG(d->hwirq));
+
+		if ((route & INTMTX_SLOT_MASK) != (win == cpu ? slot : 0))
+			return -EIO;
+	}
+
+	return irq_chip_get_parent_state(d, which, state);
+}
+
 static struct irq_chip esp_intmtx_chip = {
 	.name		= "esp-intmtx",
+	.irq_get_irqchip_state = esp_intmtx_get_state,
 	.irq_mask	= irq_chip_mask_parent,
 	.irq_unmask	= irq_chip_unmask_parent,
 	.irq_set_type	= irq_chip_set_type_parent,

@@ -4,6 +4,7 @@
  */
 
 #include <linux/bitmap.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
@@ -119,6 +120,28 @@ static void esp_clic_unmask(struct irq_data *d)
 	esp_clic_set_ie(d, true);
 }
 
+static int esp_clic_get_state(struct irq_data *d, enum irqchip_irq_state which,
+			      bool *state)
+{
+#ifdef CONFIG_SMP
+	unsigned int off = CLIC_INTIE_OFF(d->hwirq);
+	u8 ie;
+
+	if (which != IRQCHIP_STATE_MASKED)
+		return -EINVAL;
+	if (!clic->peer_base)
+		return -EOPNOTSUPP;
+
+	/* The descriptor lock pins both Self/Other reads to the same CPU. */
+	ie = readb(clic->base + off);
+	ie |= readb(clic->peer_base + off);
+	*state = !(ie & 1);
+	return 0;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
 /* Same locking guarantee as esp_clic_set_ie() above. */
 static int esp_clic_set_type(struct irq_data *d, unsigned int type)
 {
@@ -174,6 +197,7 @@ static struct irq_chip esp_clic_chip = {
 	.irq_mask	= esp_clic_mask,
 	.irq_unmask	= esp_clic_unmask,
 	.irq_set_type	= esp_clic_set_type,
+	.irq_get_irqchip_state = esp_clic_get_state,
 #ifdef CONFIG_SMP
 	.irq_set_affinity = esp_clic_set_affinity,
 #endif

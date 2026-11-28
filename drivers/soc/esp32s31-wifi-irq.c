@@ -25,6 +25,7 @@ static int esp32s31_wifi_irq_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
+	irq_hw_number_t slots[ARRAY_SIZE(wifi_irqs)];
 	int irqs[ARRAY_SIZE(wifi_irqs)];
 	struct of_phandle_args spec;
 	int i, index, ret;
@@ -74,6 +75,28 @@ static int esp32s31_wifi_irq_probe(struct platform_device *pdev)
 			return dev_err_probe(dev, ret, "cannot reserve %s IRQ\n",
 					     wifi_irqs[i].name);
 	}
+
+	for (i = 0; i < ARRAY_SIZE(wifi_irqs); i++) {
+		struct irq_data *d = irq_get_irq_data(irqs[i]);
+		bool masked = false;
+
+		if (!d || d->hwirq != wifi_irqs[i].source || !d->parent_data)
+			return dev_err_probe(dev, -EINVAL, "invalid %s IRQ mapping\n",
+					     wifi_irqs[i].name);
+		slots[i] = d->parent_data->hwirq;
+		ret = irq_get_irqchip_state(irqs[i], IRQCHIP_STATE_MASKED, &masked);
+		if (ret || !masked)
+			return dev_err_probe(dev, ret ?: -EIO,
+					     "%s source=%u virq=%d slot=%lu physical_masked=%s\n",
+					     wifi_irqs[i].name, wifi_irqs[i].source,
+					     irqs[i], slots[i], ret ? "unknown" : "0");
+	}
+	if (slots[0] == slots[1])
+		return dev_err_probe(dev, -EINVAL, "MAC and PWR share slot %lu\n", slots[0]);
+
+	for (i = 0; i < ARRAY_SIZE(wifi_irqs); i++)
+		dev_info(dev, "%s source=%u virq=%d slot=%lu physical_masked=1\n",
+			 wifi_irqs[i].name, wifi_irqs[i].source, irqs[i], slots[i]);
 
 	return 0;
 }
