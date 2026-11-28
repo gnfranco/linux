@@ -236,7 +236,9 @@ static int esp_intmtx_alloc_percpu(struct irq_domain *domain, unsigned int virq,
 err_free:
 	raw_spin_lock_irqsave(&priv->lock, flags);
 	priv->src_to_slot[src] = 0;
-	esp_intmtx_free_slot(priv, slot);
+	/* A parent mask failure makes this shared slot unsafe to reuse. */
+	if (ret != -EIO)
+		esp_intmtx_free_slot(priv, slot);
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 	return ret;
 }
@@ -306,7 +308,8 @@ static int esp_intmtx_domain_alloc(struct irq_domain *domain,
 	raw_spin_lock_irqsave(&priv->lock, flags);
 	if (ret) {
 		priv->src_to_slot[src] = 0;
-		esp_intmtx_free_slot(priv, slot);
+		if (ret != -EIO)
+			esp_intmtx_free_slot(priv, slot);
 	} else {
 		/* The parent has masked the slot and installed its handler. */
 		writel(slot & INTMTX_SLOT_MASK,
@@ -324,7 +327,8 @@ static void esp_intmtx_domain_free(struct irq_domain *domain,
 	struct esp_intmtx *priv = domain->host_data;
 	struct irq_data *d = irq_domain_get_irq_data(domain, virq);
 	unsigned long flags;
-	unsigned int src, slot, cpu;
+	unsigned int src, slot, win;
+	bool disconnected = true;
 
 	if (!d)
 		return;
@@ -333,20 +337,26 @@ static void esp_intmtx_domain_free(struct irq_domain *domain,
 	if (src > INTMTX_MAX_SRC)
 		return;
 
-	/* Routing lives wherever this irq's effective affinity currently points. */
-	cpu = cpumask_first(irq_data_get_effective_affinity_mask(d));
-
 	raw_spin_lock_irqsave(&priv->lock, flags);
 	slot = priv->src_to_slot[src];
 	/* Per-core routes are per hart and removed as each hart disables them. */
 	if (!esp_intmtx_find_percpu_src(src)) {
-		void __iomem *route = priv->base + INTMTX_WINDOW(cpu) + INTMTX_SRC_REG(src);
+		for (win = 0; win < priv->nr_windows; win++) {
+			void __iomem *route = priv->base + INTMTX_WINDOW(win) +
+					    INTMTX_SRC_REG(src);
 
-		writel(0, route);
-		readl(route);
+			writel(0, route);
+			if (readl(route) & INTMTX_SLOT_MASK)
+				disconnected = false;
+		}
 	}
-	priv->src_to_slot[src] = 0;
-	esp_intmtx_free_slot(priv, slot);
+	if (disconnected) {
+		priv->src_to_slot[src] = 0;
+		esp_intmtx_free_slot(priv, slot);
+	} else {
+		/* Retain both reservations: do not route or reuse after failure. */
+		pr_err("esp-intmtx: quarantined source %u slot %u\n", src, slot);
+	}
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 
 	/* The domain mutex excludes slot reuse through the parent free. */

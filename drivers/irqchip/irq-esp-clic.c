@@ -3,6 +3,7 @@
  * Espressif ESP32-S31 CLIC irqchip — S-mode view of the chip's CLIC.
  */
 
+#include <linux/bitmap.h>
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
@@ -48,6 +49,8 @@ struct esp_clic {
 	struct irq_domain	*domain;
 	struct irq_domain	*parent_domain;
 	unsigned int		intc_virqs[CLIC_EXT_COUNT];
+	/* Sticky until reboot; protected by the IRQ domain root mutex. */
+	DECLARE_BITMAP(bad_slots, CLIC_EXT_COUNT);
 #ifdef CONFIG_SMP
 	/* The peer core's bank, through this core's Other aperture. */
 	void __iomem		*peer_base;
@@ -267,6 +270,9 @@ static int esp_clic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		irq_hw_number_t src = hwirq + i;
 		void __iomem *bank;
 
+		if (test_bit(slot_to_idx(src), priv->bad_slots))
+			return -EIO;
+
 		if (irq_is_percpu_devid(virq + i)) {
 			irq_domain_set_info(domain, virq + i, src,
 					    &esp_clic_percpu_chip, priv,
@@ -293,6 +299,7 @@ static int esp_clic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		 * interrupt already in flight or deassert a peripheral level.
 		 */
 		if (!esp_clic_mask_slot(priv, src)) {
+			set_bit(slot_to_idx(src), priv->bad_slots);
 			preempt_enable();
 			return -EIO;
 		}
@@ -311,6 +318,8 @@ static int esp_clic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		/* Chained startup may have touched the local cause enable. */
 		preempt_disable();
 		ret = esp_clic_mask_slot(priv, src) ? 0 : -EIO;
+		if (ret)
+			set_bit(slot_to_idx(src), priv->bad_slots);
 		preempt_enable();
 		if (ret)
 			return ret;
@@ -322,6 +331,7 @@ static int esp_clic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 static void esp_clic_domain_free(struct irq_domain *domain, unsigned int virq,
 				 unsigned int nr_irqs)
 {
+	struct esp_clic *priv = domain->host_data;
 	unsigned int i;
 
 	preempt_disable();
@@ -329,9 +339,11 @@ static void esp_clic_domain_free(struct irq_domain *domain, unsigned int virq,
 		struct irq_data *d = irq_domain_get_irq_data(domain, virq + i);
 
 		if (d && d->chip == &esp_clic_chip &&
-		    !esp_clic_mask_slot(domain->host_data, d->hwirq))
-			pr_warn_ratelimited("esp-clic: slot %lu still enabled at free\n",
-					    d->hwirq);
+		    !esp_clic_mask_slot(priv, d->hwirq)) {
+			set_bit(slot_to_idx(d->hwirq), priv->bad_slots);
+			pr_err("esp-clic: quarantined slot %lu after mask failure\n",
+			       d->hwirq);
+		}
 	}
 	preempt_enable();
 	irq_domain_free_irqs_common(domain, virq, nr_irqs);
