@@ -1,11 +1,62 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Experimental reservation of the two ESP32-S31 Wi-Fi group 1 IRQs. */
 
+#include <linux/bits.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
+#include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
+
+/* Read-only fields from ESP32-S31 HP_SYS_CLKRST, not modem MMIO. */
+#define S31_HP_CLKRST_BASE	0x20587000
+#define S31_HP_MODEM_CTRL0	0x040
+#define S31_HP_MODEM_CONF	0x1e0
+#define S31_MODEM_BUS_GATE	BIT(0)
+#define S31_MODEM_CONF_FIELDS	GENMASK(5, 0)
+
+/* Optional experimental diagnostic; do not touch clocks or reset here. */
+static int esp32s31_wifi_clock_snapshot(struct device *dev)
+{
+	struct device_node *np;
+	struct resource res;
+	struct regmap *map;
+	unsigned int ctrl, conf;
+	int ret;
+
+	if (!of_property_present(dev->of_node, "esp,modem-hp-clkrst"))
+		return 0;
+
+	np = of_parse_phandle(dev->of_node, "esp,modem-hp-clkrst", 0);
+	if (!np)
+		return -EINVAL;
+	if (!of_device_is_compatible(np, "esp,esp32s31-clkrst") ||
+	    of_address_to_resource(np, 0, &res) ||
+	    res.start != S31_HP_CLKRST_BASE || resource_size(&res) < 0x1e4) {
+		of_node_put(np);
+		return -EINVAL;
+	}
+	map = syscon_node_to_regmap(np);
+	of_node_put(np);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	ret = regmap_read(map, S31_HP_MODEM_CTRL0, &ctrl);
+	if (ret)
+		return ret;
+	ret = regmap_read(map, S31_HP_MODEM_CONF, &conf);
+	if (ret)
+		return ret;
+
+	dev_info(dev, "modem-clock-snapshot bus=%u conf=0x%02x apb=%u reset=%u source_gate=%u source_sel=%u pll=%u xtal=%u\n",
+		 !!(ctrl & S31_MODEM_BUS_GATE), (unsigned int)(conf & S31_MODEM_CONF_FIELDS),
+		 !!(conf & BIT(0)), !!(conf & BIT(1)), !!(conf & BIT(2)),
+		 !!(conf & BIT(3)), !!(conf & BIT(4)), !!(conf & BIT(5)));
+	return 0;
+}
 
 static const struct {
 	const char *name;
@@ -97,6 +148,10 @@ static int esp32s31_wifi_irq_probe(struct platform_device *pdev)
 	for (i = 0; i < ARRAY_SIZE(wifi_irqs); i++)
 		dev_info(dev, "%s source=%u virq=%d slot=%lu physical_masked=1\n",
 			 wifi_irqs[i].name, wifi_irqs[i].source, irqs[i], slots[i]);
+
+	ret = esp32s31_wifi_clock_snapshot(dev);
+	if (ret)
+		return dev_err_probe(dev, ret, "cannot read modem clock snapshot\n");
 
 	return 0;
 }

@@ -43,7 +43,7 @@ config ESP32S31_RMT
 
 config ESP32S31_WIFI_IRQ
 	tristate "ESP32-S31 Wi-Fi IRQ broker (experimental)"
-	depends on ARCH_ESPRESSIF && OF
+	depends on ARCH_ESPRESSIF && OF && MFD_SYSCON
 	help
 	  Reserve the MAC and power interrupts on an explicitly enabled
 	  ESP32-S31 Wi-Fi IRQ node without automatic Linux IRQ startup.
