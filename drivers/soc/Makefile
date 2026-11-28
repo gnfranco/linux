@@ -39,3 +39,4 @@ obj-y				+= vt8500/
 obj-y				+= xilinx/
 
 obj-$(CONFIG_ESP32S31_RMT) += esp32s31-rmt.o
+obj-$(CONFIG_ESP32S31_WIFI_IRQ) += esp32s31-wifi-irq.o

@@ -41,4 +41,13 @@ config ESP32S31_RMT
 	  memory block each and interrupt-driven completion.
 	  Client drivers can use it to generate timed digital pulses.
 
+config ESP32S31_WIFI_IRQ
+	tristate "ESP32-S31 Wi-Fi IRQ broker (experimental)"
+	depends on ARCH_ESPRESSIF && OF
+	help
+	  Reserve the MAC and power interrupts on an explicitly enabled
+	  ESP32-S31 Wi-Fi IRQ node without automatic Linux IRQ startup.
+	  Do not enable the DT node until physical CLIC masking is qualified.
+	  To build as a module, choose M. The module is esp32s31-wifi-irq.
+
 endmenu

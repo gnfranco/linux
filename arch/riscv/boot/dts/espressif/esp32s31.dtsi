@@ -27,6 +27,15 @@
 		clock-frequency = <40000000>;
 	};
 
+	/* Keep disabled until physical CLIC masking is qualified. */
+	wifi_irq: wifi-irq {
+		compatible = "esp,esp32s31-wifi-irq";
+		interrupt-parent = <&intmtx>;
+		interrupts = <120 IRQ_TYPE_LEVEL_HIGH>, <122 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "mac", "pwr";
+		status = "disabled";
+	};
+
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
