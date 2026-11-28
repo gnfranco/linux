@@ -70,6 +70,25 @@ static void __iomem *esp_clic_bank_for(struct esp_clic *priv, unsigned int cpu)
 	return priv->base;
 }
 
+/* Called with preemption disabled to keep Self and Other on one hart. */
+static bool esp_clic_mask_slot(struct esp_clic *priv, unsigned int slot)
+{
+	unsigned int off = CLIC_INTIE_OFF(slot);
+	u8 ie;
+
+	writeb(0, priv->base + off);
+	ie = readb(priv->base + off);
+#ifdef CONFIG_SMP
+	if (priv->peer_base) {
+		writeb(0, priv->peer_base + off);
+		ie |= readb(priv->peer_base + off);
+	}
+#endif
+	/* Complete both readbacks before a route write or slot reuse. */
+	mb();
+	return !(ie & 1);
+}
+
 static unsigned int esp_clic_target_cpu(struct irq_data *d)
 {
 	return cpumask_first(irq_data_get_effective_affinity_mask(d));
@@ -267,14 +286,18 @@ static int esp_clic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 
 		/* Preemption off so the Self/Other choice cannot go stale. */
 		preempt_disable();
-		bank = esp_clic_bank_for(priv, 0);
-
 		/*
-		 * Clear any pending bit latched by ROM/OpenSBI before this slot
-		 * gets a handler, so the first unmask doesn't take a spurious
-		 * interrupt.
+		 * Firmware may have left IE set. Mask before chained startup
+		 * can enable the INTC cause. This relies on INTMTX having
+		 * disconnected firmware routes. Masking cannot recall an
+		 * interrupt already in flight or deassert a peripheral level.
 		 */
-		writeb_relaxed(0, bank + CLIC_INTIP_OFF(src));
+		if (!esp_clic_mask_slot(priv, src)) {
+			preempt_enable();
+			return -EIO;
+		}
+
+		bank = esp_clic_bank_for(priv, 0);
 		writeb_relaxed(CLIC_CTL_MAX_PRIO, bank + CLIC_INTCTL_OFF(src));
 		preempt_enable();
 
@@ -284,15 +307,40 @@ static int esp_clic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		ret = esp_clic_install_chained(priv, src);
 		if (ret)
 			return ret;
+
+		/* Chained startup may have touched the local cause enable. */
+		preempt_disable();
+		ret = esp_clic_mask_slot(priv, src) ? 0 : -EIO;
+		preempt_enable();
+		if (ret)
+			return ret;
 	}
 
 	return 0;
 }
 
+static void esp_clic_domain_free(struct irq_domain *domain, unsigned int virq,
+				 unsigned int nr_irqs)
+{
+	unsigned int i;
+
+	preempt_disable();
+	for (i = 0; i < nr_irqs; i++) {
+		struct irq_data *d = irq_domain_get_irq_data(domain, virq + i);
+
+		if (d && d->chip == &esp_clic_chip &&
+		    !esp_clic_mask_slot(domain->host_data, d->hwirq))
+			pr_warn_ratelimited("esp-clic: slot %lu still enabled at free\n",
+					    d->hwirq);
+	}
+	preempt_enable();
+	irq_domain_free_irqs_common(domain, virq, nr_irqs);
+}
+
 static const struct irq_domain_ops esp_clic_domain_ops = {
 	.translate	= irq_domain_translate_twocell,
 	.alloc		= esp_clic_domain_alloc,
-	.free		= irq_domain_free_irqs_common,
+	.free		= esp_clic_domain_free,
 };
 
 static int __init esp_clic_init(struct device_node *node,

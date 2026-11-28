@@ -289,8 +289,6 @@ static int esp_intmtx_domain_alloc(struct irq_domain *domain,
 		goto out;
 	}
 
-	writel_relaxed((u32)slot & INTMTX_SLOT_MASK,
-		       priv->base + INTMTX_WINDOW(0) + INTMTX_SRC_REG(src));
 	priv->src_to_slot[src] = (u8)slot;
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 
@@ -305,16 +303,15 @@ static int esp_intmtx_domain_alloc(struct irq_domain *domain,
 	parent_fwspec.param[1] = type;
 
 	ret = irq_domain_alloc_irqs_parent(domain, virq, 1, &parent_fwspec);
+	raw_spin_lock_irqsave(&priv->lock, flags);
 	if (ret) {
-		raw_spin_lock_irqsave(&priv->lock, flags);
-		writel_relaxed(0, priv->base + INTMTX_WINDOW(0) + INTMTX_SRC_REG(src));
 		priv->src_to_slot[src] = 0;
 		esp_intmtx_free_slot(priv, slot);
-		raw_spin_unlock_irqrestore(&priv->lock, flags);
-		return ret;
+	} else {
+		/* The parent has masked the slot and installed its handler. */
+		writel(slot & INTMTX_SLOT_MASK,
+		       priv->base + INTMTX_WINDOW(0) + INTMTX_SRC_REG(src));
 	}
-
-	return 0;
 
 out:
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
@@ -342,12 +339,17 @@ static void esp_intmtx_domain_free(struct irq_domain *domain,
 	raw_spin_lock_irqsave(&priv->lock, flags);
 	slot = priv->src_to_slot[src];
 	/* Per-core routes are per hart and removed as each hart disables them. */
-	if (!esp_intmtx_find_percpu_src(src))
-		writel_relaxed(0, priv->base + INTMTX_WINDOW(cpu) + INTMTX_SRC_REG(src));
+	if (!esp_intmtx_find_percpu_src(src)) {
+		void __iomem *route = priv->base + INTMTX_WINDOW(cpu) + INTMTX_SRC_REG(src);
+
+		writel(0, route);
+		readl(route);
+	}
 	priv->src_to_slot[src] = 0;
 	esp_intmtx_free_slot(priv, slot);
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 
+	/* The domain mutex excludes slot reuse through the parent free. */
 	irq_domain_free_irqs_common(domain, virq, nr_irqs);
 }
 
